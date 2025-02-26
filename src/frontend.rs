@@ -131,23 +131,25 @@ impl Resolver {
     fn resolve_params(
         &mut self, params: &Vec<(String, SrcLoc)>, env: &mut Env,
     ) -> Result<Vec<(VarName, SrcLoc)>, CompileErr> {
+        // Check for duplicates
         let mut param_set: HashSet<String> = HashSet::new();
+        for (param, loc) in params {
+            if !param_set.insert(param.clone()) {
+                return Err(CompileErr::DuplicateParameter(
+                    param.clone(),
+                    *loc,
+                ));
+            }
+        }
 
         Ok(params
             .iter()
             .map(|(param, loc)| {
-                if !param_set.insert(param.clone()) {
-                    return Err(CompileErr::DuplicateParameter(
-                        param.clone(),
-                        *loc,
-                    ));
-                }
-
                 let param_var_name = self.vars.fresh(param);
                 env.insert_var(param, &param_var_name);
-                Ok((param_var_name, *loc))
+                (param_var_name, *loc)
             })
-            .collect::<Result<_, _>>()?)
+            .collect())
     }
 
     fn resolve_expr(
