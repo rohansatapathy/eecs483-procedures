@@ -7,6 +7,7 @@ use crate::ast::*;
 use crate::identifiers::*;
 use crate::span::SrcLoc;
 use im::HashMap;
+use std::collections::HashSet;
 
 pub struct Resolver {
     pub vars: IdGen<VarName>,
@@ -130,7 +131,23 @@ impl Resolver {
     fn resolve_params(
         &mut self, params: &Vec<(String, SrcLoc)>, env: &mut Env,
     ) -> Result<Vec<(VarName, SrcLoc)>, CompileErr> {
-        todo!()
+        let mut param_set: HashSet<String> = HashSet::new();
+
+        Ok(params
+            .iter()
+            .map(|(param, loc)| {
+                if !param_set.insert(param.clone()) {
+                    return Err(CompileErr::DuplicateParameter(
+                        param.clone(),
+                        *loc,
+                    ));
+                }
+
+                let param_var_name = self.vars.fresh(param);
+                env.insert_var(param, &param_var_name);
+                Ok((param_var_name, *loc))
+            })
+            .collect::<Result<_, _>>()?)
     }
 
     fn resolve_expr(
