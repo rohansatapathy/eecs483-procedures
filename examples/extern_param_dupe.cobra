@@ -1,0 +1,4 @@
+extern bad_extern(a, b, c, a)
+
+def main(x):
+    bad_extern(x, 0, 1, 2)

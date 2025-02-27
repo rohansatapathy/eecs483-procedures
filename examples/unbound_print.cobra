@@ -1,0 +1,3 @@
+def main(x):
+    let _ = print(1) in
+    0

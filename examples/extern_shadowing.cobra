@@ -1,0 +1,8 @@
+extern print(x)
+
+def main(x):
+    let _ = print(5) in
+    def print(x, y):
+        x + y
+    in
+    print(x, 5 * x)
