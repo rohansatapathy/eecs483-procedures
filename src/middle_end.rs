@@ -26,6 +26,21 @@ impl From<Resolver> for Lowerer {
     }
 }
 
+impl Continuation {
+    fn invoke(self, imm: Immediate) -> BlockBody {
+        match self {
+            Continuation::Return => {
+                BlockBody::Terminator(Terminator::Return(imm))
+            }
+            Continuation::Block(dest, next) => BlockBody::Operation {
+                dest,
+                op: Operation::Immediate(imm),
+                next: Box::new(next),
+            },
+        }
+    }
+}
+
 /// OPTIONAL:
 /// Determine which functions should be lambda lifted.
 /// If you choose not to implement this, then lift *all* functions
@@ -35,6 +50,37 @@ fn should_lift(prog: &BoundProg) -> HashSet<FunName> {
 
 impl Lowerer {
     pub fn lower_prog(&mut self, prog: BoundProg) -> Program {
-        todo!("lower_prog not implemented")
+        if !prog.externs.is_empty() {
+            panic!("middle end doesn't support externs yet")
+        }
+        let externs = vec![];
+
+        let main_block_label = self.blocks.fresh("main_tail");
+        let main_fun_block = FunBlock {
+            name: prog.name,
+            params: vec![prog.param.0.clone()],
+            body: Branch {
+                target: main_block_label.clone(),
+                args: vec![Immediate::Var(prog.param.0)],
+            },
+        };
+        let funs = vec![main_fun_block];
+
+        let main_block_body =
+            self.lower_expr_kont(prog.body, Continuation::Return, true);
+        let main_basic_block = BasicBlock {
+            label: main_block_label,
+            params: vec![self.vars.fresh("x")],
+            body: main_block_body,
+        };
+        let blocks = vec![main_basic_block];
+
+        Program { externs, funs, blocks }
+    }
+
+    fn lower_expr_kont(
+        &mut self, expr: BoundExpr, k: Continuation, in_tail_pos: bool,
+    ) -> BlockBody {
+        todo!("lower_expr_kont not implemented")
     }
 }
