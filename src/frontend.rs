@@ -37,8 +37,8 @@ impl Env {
         Self { vars: HashMap::new(), labels: HashMap::new() }
     }
 
-    fn insert_var(&mut self, var: &String, var_name: &VarName) {
-        self.vars.insert(var.clone(), var_name.clone());
+    fn insert_var(&mut self, var: String, var_name: VarName) {
+        self.vars.insert(var, var_name);
     }
 
     fn get_var_name(&self, var: &String) -> Option<&VarName> {
@@ -46,10 +46,9 @@ impl Env {
     }
 
     fn insert_label(
-        &mut self, label: &String, fun_name: &FunName, arity: usize,
+        &mut self, label: String, fun_name: FunName, arity: usize,
     ) {
-        self.labels
-            .insert(label.clone(), EnvFun::new(fun_name.clone(), arity));
+        self.labels.insert(label, EnvFun::new(fun_name, arity));
     }
 
     fn get_env_fun(&self, label: &String) -> Option<&EnvFun> {
@@ -90,7 +89,7 @@ impl Resolver {
 
         // Add main function to environment
         let name = FunName::Unmangled("entry".to_string());
-        env.insert_label(&prog.name, &name, 1);
+        env.insert_label(prog.name.clone(), name.clone(), 1);
 
         // Add extern functions to environment
         let externs = prog
@@ -109,7 +108,11 @@ impl Resolver {
                     self.resolve_params(&decl.params, &mut env.clone())?;
                 let loc = decl.loc;
 
-                env.insert_label(&decl.name, &name, params.len());
+                env.insert_label(
+                    decl.name.clone(),
+                    name.clone(),
+                    params.len(),
+                );
 
                 Ok(BoundExtDecl { name, params, loc })
             })
@@ -117,13 +120,13 @@ impl Resolver {
 
         // Add parameter to environment
         let param = self.vars.fresh(&prog.param.0);
-        env.insert_var(&prog.param.0, &param);
+        env.insert_var(prog.param.0, param.clone());
 
         Ok(BoundProg {
             externs,
             name,
             param: (param, prog.param.1),
-            body: self.resolve_expr(prog.body, &mut env)?,
+            body: self.resolve_expr(prog.body, env)?,
             loc: prog.loc,
         })
     }
@@ -146,15 +149,136 @@ impl Resolver {
             .iter()
             .map(|(param, loc)| {
                 let param_var_name = self.vars.fresh(param);
-                env.insert_var(param, &param_var_name);
+                env.insert_var(param.clone(), param_var_name.clone());
                 (param_var_name, *loc)
             })
             .collect())
     }
 
     fn resolve_expr(
-        &mut self, expr: SurfExpr, env: &mut Env,
+        &mut self, expr: SurfExpr, mut env: Env,
     ) -> Result<BoundExpr, CompileErr> {
-        todo!()
+        let bound_expr = match expr {
+            Expr::Num(n, loc) => Expr::Num(n, loc),
+            Expr::Bool(b, loc) => Expr::Bool(b, loc),
+            Expr::Var(var, loc) => Expr::Var(
+                env.get_var_name(&var)
+                    .ok_or(CompileErr::UnboundVariable(var.clone(), loc))?
+                    .clone(),
+                loc,
+            ),
+            Expr::Prim { prim, args, loc } => Expr::Prim {
+                prim,
+                args: args
+                    .into_iter()
+                    .map(|arg| self.resolve_expr(arg, env.clone()))
+                    .collect::<Result<_, _>>()?,
+                loc,
+            },
+            Expr::Let { bindings, body, loc } => {
+                let mut dup: HashSet<String> = HashSet::new();
+                for binding in &bindings {
+                    if !dup.insert(binding.var.0.clone()) {
+                        return Err(CompileErr::DuplicateVariable(
+                            binding.var.0.clone(),
+                            binding.var.1,
+                        ));
+                    }
+                }
+
+                let bindings = bindings
+                    .into_iter()
+                    .map(|binding| {
+                        let var_name = self.vars.fresh(&binding.var.0);
+                        let expr =
+                            self.resolve_expr(binding.expr, env.clone())?;
+
+                        env.insert_var(binding.var.0, var_name.clone());
+                        Ok(Binding { var: (var_name, binding.var.1), expr })
+                    })
+                    .collect::<Result<_, _>>()?;
+
+                Expr::Let {
+                    bindings,
+                    body: Box::new(self.resolve_expr(*body, env)?),
+                    loc,
+                }
+            }
+            Expr::If { cond, thn, els, loc } => Expr::If {
+                cond: Box::new(self.resolve_expr(*cond, env.clone())?),
+                thn: Box::new(self.resolve_expr(*thn, env.clone())?),
+                els: Box::new(self.resolve_expr(*els, env)?),
+                loc,
+            },
+            Expr::FunDefs { decls, body, loc } => {
+                // Check for duplication. If there are no duplicates, add
+                // function names to env before resolving them.
+                let mut dup: HashSet<String> = HashSet::new();
+                for decl in &decls {
+                    if !dup.insert(decl.name.clone()) {
+                        return Err(CompileErr::DuplicateFunction(
+                            decl.name.clone(),
+                            decl.loc,
+                        ));
+                    }
+                    env.insert_label(
+                        decl.name.clone(),
+                        self.funs.fresh(&decl.name),
+                        decl.params.len(),
+                    );
+                }
+
+                let decls = decls
+                    .into_iter()
+                    .map(|decl| self.resolve_fun_decl(decl, env.clone()))
+                    .collect::<Result<_, _>>()?;
+
+                let body = self.resolve_expr(*body, env)?;
+
+                Expr::FunDefs { decls, body: Box::new(body), loc }
+            }
+            Expr::Call { fun, args, loc } => {
+                let env_fun = env.get_env_fun(&fun).ok_or_else(|| {
+                    CompileErr::UnboundFunction(fun.clone(), loc)
+                })?;
+
+                if env_fun.arity != args.len() {
+                    return Err(CompileErr::ArityMismatch {
+                        name: fun.clone(),
+                        expected: env_fun.arity,
+                        found: args.len(),
+                        loc,
+                    });
+                }
+
+                let fun = env_fun.name.clone();
+                let args = args
+                    .into_iter()
+                    .map(|arg| self.resolve_expr(arg, env.clone()))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Expr::Call { fun, args, loc }
+            }
+        };
+
+        Ok(bound_expr)
+    }
+
+    /// Resolve a single function declaration.
+    ///
+    /// Assume that the declaration name has already been checked for
+    /// duplication and that the function name is already in env.
+    fn resolve_fun_decl(
+        &mut self, decl: SurfFunDecl, mut env: Env,
+    ) -> Result<BoundFunDecl, CompileErr> {
+        let name = env
+            .get_env_fun(&decl.name)
+            .expect("FunDecl should already be in env")
+            .name
+            .clone();
+        let params = self.resolve_params(&decl.params, &mut env)?;
+        let body = self.resolve_expr(decl.body, env.clone())?;
+
+        Ok(BoundFunDecl { name, params, body, loc: decl.loc })
     }
 }
