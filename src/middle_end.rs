@@ -81,6 +81,167 @@ impl Lowerer {
     fn lower_expr_kont(
         &mut self, expr: BoundExpr, k: Continuation, in_tail_pos: bool,
     ) -> BlockBody {
-        todo!("lower_expr_kont not implemented")
+        match expr {
+            Expr::Num(n, _) => k.invoke(Immediate::Const(n)),
+            Expr::Bool(b, _) => {
+                k.invoke(Immediate::Const(if b { 1 } else { 0 }))
+            }
+            Expr::Var(var, _) => k.invoke(Immediate::Var(var)),
+            Expr::Prim { prim, args, loc: _ } => {
+                // For each arg, create a tmp variable to store the result in
+                // and the corresponding Immediate
+                let (args_var, args_imm): (Vec<_>, Vec<_>) = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _arg)| {
+                        let var =
+                            self.vars.fresh(format!("{}_{}", &prim, i));
+                        (var.clone(), Immediate::Var(var))
+                    })
+                    .unzip();
+
+                // Get the result variable and the continuation's BlockBody
+                let (dest, next) = match k {
+                    Continuation::Block(res, block) => (res, block),
+                    Continuation::Return => {
+                        let res = self.vars.fresh(format!("{}_res", &prim));
+                        (res.clone(), k.invoke(Immediate::Var(res)))
+                    }
+                };
+
+                // Helper functions for different categories of Prim. Each
+                // helper handles that type of function and returns the
+                // BlockBody corresponding to that operation.
+
+                // prim1 handles Add1 and Sub1 operations
+                let prim1 = |prim: ssa::Prim2, imm: Immediate, next| {
+                    let dest = dest.clone();
+                    let op =
+                        Operation::Prim2(prim, args_imm[0].clone(), imm);
+                    BlockBody::Operation { dest, op, next: Box::new(next) }
+                };
+
+                // prim2 handles all arithmetic and comparison Prim operations
+                let prim2 = |prim: ssa::Prim2, next| {
+                    let dest = dest.clone();
+                    let op = Operation::Prim2(
+                        prim,
+                        args_imm[0].clone(),
+                        args_imm[1].clone(),
+                    );
+                    BlockBody::Operation { dest, op, next: Box::new(next) }
+                };
+
+                // prim2_logical handles all Prims that require 2 boolean
+                // arguments (i.e. Prim::And and Prim::Or)
+                let mut prim2_logical = |prim: ssa::Prim2, next| {
+                    let dest = dest.clone();
+
+                    // Create the VarNames and corresponding Immediates
+                    // for the type-converted versions of the arguments
+                    let (type_checked_args, type_checked_imms): (
+                        Vec<_>,
+                        Vec<_>,
+                    ) = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| {
+                            let var = self.vars.fresh("itob_res");
+                            (var.clone(), Immediate::Var(var))
+                        })
+                        .collect();
+
+                    BlockBody::Operation {
+                        dest: type_checked_args[0].clone(),
+                        op: Operation::Prim1(
+                            Prim1::IntToBool,
+                            args_imm[0].clone(),
+                        ),
+                        next: Box::new(BlockBody::Operation {
+                            dest: type_checked_args[1].clone(),
+                            op: Operation::Prim1(
+                                Prim1::IntToBool,
+                                args_imm[1].clone(),
+                            ),
+                            next: Box::new(BlockBody::Operation {
+                                dest,
+                                op: Operation::Prim2(
+                                    prim,
+                                    type_checked_imms[0].clone(),
+                                    type_checked_imms[1].clone(),
+                                ),
+                                next: Box::new(next),
+                            }),
+                        }),
+                    }
+                };
+
+                // Create the BlockBody for the final operation
+                let block = match prim {
+                    Prim::Add1 => {
+                        prim1(Prim2::Add, Immediate::Const(1), next)
+                    }
+                    Prim::Sub1 => {
+                        prim1(Prim2::Sub, Immediate::Const(1), next)
+                    }
+                    Prim::Add => prim2(Prim2::Add, next),
+                    Prim::Sub => prim2(Prim2::Sub, next),
+                    Prim::Mul => prim2(Prim2::Mul, next),
+                    Prim::Not => {
+                        let tmp = self.vars.fresh("itob_res");
+                        BlockBody::Operation {
+                            dest: tmp.clone(),
+                            op: Operation::Prim1(
+                                Prim1::IntToBool,
+                                args_imm[0].clone(),
+                            ),
+                            next: Box::new(BlockBody::Operation {
+                                dest,
+                                op: Operation::Prim2(
+                                    Prim2::BitXor,
+                                    Immediate::Var(tmp),
+                                    Immediate::Const(1),
+                                ),
+                                next: Box::new(next),
+                            }),
+                        }
+                    }
+                    Prim::And => prim2_logical(Prim2::BitAnd, next),
+                    Prim::Or => prim2_logical(Prim2::BitOr, next),
+                    Prim::Lt => prim2(Prim2::Lt, next),
+                    Prim::Le => prim2(Prim2::Le, next),
+                    Prim::Gt => prim2(Prim2::Gt, next),
+                    Prim::Ge => prim2(Prim2::Ge, next),
+                    Prim::Eq => prim2(Prim2::Eq, next),
+                    Prim::Neq => prim2(Prim2::Neq, next),
+                };
+
+                // Use fold() to build up the surrounding expression
+                // evaluations over the current block.
+                args.into_iter().zip(args_var).rev().fold(
+                    block,
+                    |block, (arg, var)| {
+                        self.lower_expr_kont(
+                            arg,
+                            Continuation::Block(var, block),
+                            false,
+                        )
+                    },
+                )
+            }
+            Expr::Let { bindings, body, loc } => {
+                let block = self.lower_expr_kont(*body, k, in_tail_pos);
+                bindings.into_iter().rev().fold(block, |block, binding| {
+                    self.lower_expr_kont(
+                        binding.expr,
+                        Continuation::Block(binding.var.0, block),
+                        false,
+                    )
+                })
+            }
+            Expr::If { cond, thn, els, loc } => todo!(),
+            Expr::FunDefs { decls, body, loc } => todo!(),
+            Expr::Call { fun, args, loc } => todo!(),
+        }
     }
 }
