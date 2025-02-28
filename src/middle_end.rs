@@ -4,6 +4,7 @@
 use crate::ast::{self, *};
 use crate::ssa::{self, *};
 use crate::{frontend::Resolver, identifiers::*};
+use im::HashMap;
 use std::collections::HashSet;
 
 pub struct Lowerer {
@@ -18,6 +19,10 @@ enum Continuation {
     Return,
     Block(VarName, BlockBody),
 }
+
+/// Env is used to temporarily map FunNames to their corresponding "_tail"
+/// BlockNames.
+type Env = HashMap<FunName, BlockName>;
 
 impl From<Resolver> for Lowerer {
     fn from(resolver: Resolver) -> Self {
@@ -58,7 +63,7 @@ impl Lowerer {
         let main_block_label = self.blocks.fresh("main_tail");
         let main_fun_block_arg = self.vars.fresh("x");
         let main_fun_block = FunBlock {
-            name: prog.name,
+            name: prog.name.clone(),
             params: vec![main_fun_block_arg.clone()],
             body: Branch {
                 target: main_block_label.clone(),
@@ -67,8 +72,11 @@ impl Lowerer {
         };
         let funs = vec![main_fun_block];
 
+        let mut env = Env::new();
+        env.insert(prog.name, main_block_label.clone());
+
         let main_block_body =
-            self.lower_expr_kont(prog.body, Continuation::Return);
+            self.lower_expr_kont(prog.body, Continuation::Return, &mut env);
         let main_basic_block = BasicBlock {
             label: main_block_label,
             params: vec![prog.param.0],
@@ -80,7 +88,7 @@ impl Lowerer {
     }
 
     fn lower_expr_kont(
-        &mut self, expr: BoundExpr, k: Continuation,
+        &mut self, expr: BoundExpr, k: Continuation, env: &mut Env,
     ) -> BlockBody {
         match expr {
             Expr::Num(n, _) => k.invoke(Immediate::Const(n)),
@@ -225,16 +233,18 @@ impl Lowerer {
                         self.lower_expr_kont(
                             arg,
                             Continuation::Block(var, block),
+                            env,
                         )
                     },
                 )
             }
             Expr::Let { bindings, body, loc } => {
-                let block = self.lower_expr_kont(*body, k);
+                let block = self.lower_expr_kont(*body, k, env);
                 bindings.into_iter().rev().fold(block, |block, binding| {
                     self.lower_expr_kont(
                         binding.expr,
                         Continuation::Block(binding.var.0, block),
+                        env,
                     )
                 })
             }
@@ -254,6 +264,7 @@ impl Lowerer {
                             },
                         ),
                     ),
+                    env,
                 ));
                 // Here is the exponential implementation
                 // let mut branch = |label, body: BoundExpr| BasicBlock {
@@ -276,6 +287,7 @@ impl Lowerer {
                                 body: self.lower_expr_kont(
                                     body,
                                     Continuation::Return,
+                                    env,
                                 ),
                             };
 
@@ -313,6 +325,7 @@ impl Lowerer {
                                                 }),
                                             ),
                                         ),
+                                        env,
                                     ),
                                 }
                             };
@@ -333,7 +346,7 @@ impl Lowerer {
                 }
             }
             Expr::FunDefs { decls, body, loc } => {
-                let next = Box::new(self.lower_expr_kont(*body, k));
+                let next = Box::new(self.lower_expr_kont(*body, k, env));
                 BlockBody::SubBlocks {
                     blocks: decls
                         .into_iter()
@@ -341,10 +354,22 @@ impl Lowerer {
                             |FunDecl { name, params, body, loc: _ }| {
                                 // tail recursive functions are built as sub-blocks
                                 Some(BasicBlock {
-                                    label: self.blocks.fresh(format!(
-                                        "{}_tail",
-                                        name.hint()
-                                    )),
+                                    label: match env.get(&name) {
+                                        Some(lbl) => lbl.clone(),
+                                        None => {
+                                            let tail_lbl =
+                                                self.blocks.fresh(format!(
+                                                    "{}_tail",
+                                                    name.hint()
+                                                ));
+                                            env.insert(
+                                                name.clone(),
+                                                tail_lbl.clone(),
+                                            );
+                                            tail_lbl
+                                        }
+                                    },
+
                                     params: params
                                         .into_iter()
                                         .map(|(p, _)| p)
@@ -352,6 +377,7 @@ impl Lowerer {
                                     body: self.lower_expr_kont(
                                         body,
                                         Continuation::Return,
+                                        env,
                                     ),
                                 })
                             },
@@ -384,9 +410,17 @@ impl Lowerer {
                 // tail calls are compiled to a branch
                 let block =
                     BlockBody::Terminator(Terminator::Branch(Branch {
-                        target: self
-                            .blocks
-                            .fresh(format!("{}_tail", fun.hint())),
+                        target: match env.get(&fun) {
+                            Some(lbl) => lbl.clone(),
+                            None => {
+                                let tail_lbl = self
+                                    .blocks
+                                    .fresh(format!("{}_tail", fun.hint()));
+                                env.insert(fun.clone(), tail_lbl.clone());
+                                tail_lbl
+                            }
+                        },
+
                         args: args_imm,
                     }));
 
@@ -397,6 +431,7 @@ impl Lowerer {
                         self.lower_expr_kont(
                             arg,
                             Continuation::Block(var, block),
+                            env,
                         )
                     },
                 )
