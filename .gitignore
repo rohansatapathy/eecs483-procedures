@@ -1,3 +1,4 @@
 target
-runtime/compiled_code.s
+runtime/*
+!runtime/stub.rs
 Assignment 3_*
