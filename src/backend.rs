@@ -58,7 +58,7 @@ impl Emitter {
         let mut env = Env::new();
 
         for ext in &prog.externs {
-            self.emit_extern(ext, &mut env);
+            self.emit(Instr::Extern(ext.name.to_string()));
         }
 
         // First, register all blocks as having the same base offset of 1.
@@ -78,10 +78,6 @@ impl Emitter {
         for fun in &prog.funs {
             self.emit_fun_block(fun, &mut env);
         }
-    }
-
-    fn emit_extern<'a>(&mut self, ext: &'a Extern, env: &mut Env<'a>) {
-        unimplemented!("backend doesn't support externs yet")
     }
 
     fn emit_fun_block<'a>(
