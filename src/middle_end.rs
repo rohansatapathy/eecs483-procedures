@@ -56,12 +56,13 @@ impl Lowerer {
         let externs = vec![];
 
         let main_block_label = self.blocks.fresh("main_tail");
+        let main_fun_block_arg = self.vars.fresh("x");
         let main_fun_block = FunBlock {
             name: prog.name,
-            params: vec![prog.param.0.clone()],
+            params: vec![main_fun_block_arg.clone()],
             body: Branch {
                 target: main_block_label.clone(),
-                args: vec![Immediate::Var(prog.param.0)],
+                args: vec![Immediate::Var(main_fun_block_arg)],
             },
         };
         let funs = vec![main_fun_block];
@@ -70,7 +71,7 @@ impl Lowerer {
             self.lower_expr_kont(prog.body, Continuation::Return);
         let main_basic_block = BasicBlock {
             label: main_block_label,
-            params: vec![self.vars.fresh("x")],
+            params: vec![prog.param.0],
             body: main_block_body,
         };
         let blocks = vec![main_basic_block];
@@ -359,7 +360,47 @@ impl Lowerer {
                     next,
                 }
             }
-            Expr::Call { fun, args, loc } => todo!(),
+            Expr::Call { fun, args, loc } => {
+                match k {
+                    Continuation::Return => {}
+                    Continuation::Block(..) => {
+                        panic!(
+                            "middle end doesn't support non-tail calls yet"
+                        )
+                    }
+                }
+
+                // prepare the arguments
+                let (args_var, args_imm): (Vec<_>, _) = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _arg)| {
+                        // the arguments are named after the function name and the argument index
+                        let var =
+                            self.vars.fresh(format!("{}_{}", fun.hint(), i));
+                        (var.clone(), Immediate::Var(var))
+                    })
+                    .unzip();
+                // tail calls are compiled to a branch
+                let block =
+                    BlockBody::Terminator(Terminator::Branch(Branch {
+                        target: self
+                            .blocks
+                            .fresh(format!("{}_tail", fun.hint())),
+                        args: args_imm,
+                    }));
+
+                // compile in reverse order, as above
+                args.into_iter().zip(args_var).rev().fold(
+                    block,
+                    |block, (arg, var)| {
+                        self.lower_expr_kont(
+                            arg,
+                            Continuation::Block(var, block),
+                        )
+                    },
+                )
+            }
         }
     }
 }
