@@ -237,7 +237,100 @@ impl Lowerer {
                     )
                 })
             }
-            Expr::If { cond, thn, els, loc } => todo!(),
+            Expr::If { cond, thn, els, loc } => {
+                let cond_var = self.vars.fresh("cond");
+                let thn_label = self.blocks.fresh("thn");
+                let els_label = self.blocks.fresh("els");
+                let cond_branch = Box::new(self.lower_expr_kont(
+                    *cond,
+                    Continuation::Block(
+                        cond_var.clone(),
+                        BlockBody::Terminator(
+                            Terminator::ConditionalBranch {
+                                cond: Immediate::Var(cond_var),
+                                thn: thn_label.clone(),
+                                els: els_label.clone(),
+                            },
+                        ),
+                    ),
+                ));
+                // Here is the exponential implementation
+                // let mut branch = |label, body: BoundExpr| BasicBlock {
+                //     label,
+                //     params: Vec::new(),
+                //     body: self.lower_expr_kont(body, k.clone()),
+                // };
+                // BlockBody::SubBlocks {
+                //     blocks: vec![branch(thn_label, *thn), branch(els_label, *els)],
+                //     next: cond_branch,
+                // }
+
+                // Here is the correct implementation, also optimizing to not create a join point if in tail position
+                match k {
+                    Continuation::Return => {
+                        let mut branch =
+                            |label, body: BoundExpr| BasicBlock {
+                                label,
+                                params: Vec::new(),
+                                body: self.lower_expr_kont(
+                                    body,
+                                    Continuation::Return,
+                                ),
+                            };
+
+                        BlockBody::SubBlocks {
+                            blocks: vec![
+                                branch(thn_label, *thn),
+                                branch(els_label, *els),
+                            ],
+                            next: cond_branch,
+                        }
+                    }
+                    // if we have a non-trivial continuation, we create a join point
+                    Continuation::Block(dest, body) => {
+                        // fresh variables for return positions in kontinuations
+                        let thn_var = self.vars.fresh("thn_res");
+                        let els_var = self.vars.fresh("els_res");
+                        let join_label = self.blocks.fresh("jn");
+
+                        let mut branch =
+                            |label, expr: BoundExpr, var: VarName| {
+                                BasicBlock {
+                                    label,
+                                    params: Vec::new(),
+                                    body: self.lower_expr_kont(
+                                        expr,
+                                        Continuation::Block(
+                                            var.clone(),
+                                            BlockBody::Terminator(
+                                                Terminator::Branch(Branch {
+                                                    target: join_label
+                                                        .clone(),
+                                                    args: vec![
+                                                        Immediate::Var(var),
+                                                    ],
+                                                }),
+                                            ),
+                                        ),
+                                    ),
+                                }
+                            };
+
+                        BlockBody::SubBlocks {
+                            blocks: vec![
+                                branch(thn_label, *thn, thn_var),
+                                branch(els_label, *els, els_var),
+                                BasicBlock {
+                                    label: join_label,
+                                    params: vec![dest],
+                                    body,
+                                },
+                            ],
+                            next: cond_branch,
+                        }
+                    }
+                }
+            }
             Expr::FunDefs { decls, body, loc } => todo!(),
             Expr::Call { fun, args, loc } => todo!(),
         }
