@@ -67,7 +67,7 @@ impl Lowerer {
         let funs = vec![main_fun_block];
 
         let main_block_body =
-            self.lower_expr_kont(prog.body, Continuation::Return, true);
+            self.lower_expr_kont(prog.body, Continuation::Return);
         let main_basic_block = BasicBlock {
             label: main_block_label,
             params: vec![self.vars.fresh("x")],
@@ -79,7 +79,7 @@ impl Lowerer {
     }
 
     fn lower_expr_kont(
-        &mut self, expr: BoundExpr, k: Continuation, in_tail_pos: bool,
+        &mut self, expr: BoundExpr, k: Continuation,
     ) -> BlockBody {
         match expr {
             Expr::Num(n, _) => k.invoke(Immediate::Const(n)),
@@ -224,18 +224,16 @@ impl Lowerer {
                         self.lower_expr_kont(
                             arg,
                             Continuation::Block(var, block),
-                            false,
                         )
                     },
                 )
             }
             Expr::Let { bindings, body, loc } => {
-                let block = self.lower_expr_kont(*body, k, in_tail_pos);
+                let block = self.lower_expr_kont(*body, k);
                 bindings.into_iter().rev().fold(block, |block, binding| {
                     self.lower_expr_kont(
                         binding.expr,
                         Continuation::Block(binding.var.0, block),
-                        false,
                     )
                 })
             }
