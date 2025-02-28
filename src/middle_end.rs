@@ -20,9 +20,19 @@ enum Continuation {
     Block(VarName, BlockBody),
 }
 
-/// Env is used to temporarily map FunNames to their corresponding "_tail"
-/// BlockNames.
-type Env = HashMap<FunName, BlockName>;
+#[derive(Clone)]
+enum EnvVal {
+    BlockName(BlockName),
+    Extern,
+}
+
+/// Env is used to map internal FunNames to their corresponding "_tail"
+/// BlockNames and to mark external FunNames as extern.
+///
+/// Note: We can't use whether or not the FunName is Mangled or Unmangled for
+/// this because the main function is unmangled and still has a "_tail" block
+/// associated with it.
+type Env = HashMap<FunName, EnvVal>;
 
 impl From<Resolver> for Lowerer {
     fn from(resolver: Resolver) -> Self {
@@ -55,10 +65,23 @@ fn should_lift(prog: &BoundProg) -> HashSet<FunName> {
 
 impl Lowerer {
     pub fn lower_prog(&mut self, prog: BoundProg) -> Program {
-        if !prog.externs.is_empty() {
-            panic!("middle end doesn't support externs yet")
-        }
-        let externs = vec![];
+        let mut env = Env::new();
+
+        let externs = prog
+            .externs
+            .iter()
+            .map(|ext| {
+                env.insert(ext.name.clone(), EnvVal::Extern);
+                Extern {
+                    name: ext.name.clone(),
+                    params: ext
+                        .params
+                        .iter()
+                        .map(|(p, _)| p.clone())
+                        .collect(),
+                }
+            })
+            .collect();
 
         let main_block_label = self.blocks.fresh("main_tail");
         let main_fun_block_arg = self.vars.fresh("x");
@@ -72,8 +95,7 @@ impl Lowerer {
         };
         let funs = vec![main_fun_block];
 
-        let mut env = Env::new();
-        env.insert(prog.name, main_block_label.clone());
+        env.insert(prog.name, EnvVal::BlockName(main_block_label.clone()));
 
         let main_block_body =
             self.lower_expr_kont(prog.body, Continuation::Return, &mut env);
@@ -355,8 +377,12 @@ impl Lowerer {
                                 // tail recursive functions are built as sub-blocks
                                 Some(BasicBlock {
                                     label: match env.get(&name) {
-                                        Some(lbl) => lbl.clone(),
-                                        None => {
+                                        // We only want to use an existing label if the function is
+                                        // internal.
+                                        Some(EnvVal::BlockName(lbl)) => {
+                                            lbl.clone()
+                                        }
+                                        _ => {
                                             let tail_lbl =
                                                 self.blocks.fresh(format!(
                                                     "{}_tail",
@@ -364,7 +390,9 @@ impl Lowerer {
                                                 ));
                                             env.insert(
                                                 name.clone(),
-                                                tail_lbl.clone(),
+                                                EnvVal::BlockName(
+                                                    tail_lbl.clone(),
+                                                ),
                                             );
                                             tail_lbl
                                         }
@@ -386,18 +414,9 @@ impl Lowerer {
                     next,
                 }
             }
-            Expr::Call { fun, args, loc } => {
-                match k {
-                    Continuation::Return => {}
-                    Continuation::Block(..) => {
-                        panic!(
-                            "middle end doesn't support non-tail calls yet"
-                        )
-                    }
-                }
-
+            Expr::Call { fun, args, loc: _ } => {
                 // prepare the arguments
-                let (args_var, args_imm): (Vec<_>, _) = args
+                let (args_var, args_imm): (Vec<_>, Vec<_>) = args
                     .iter()
                     .enumerate()
                     .map(|(i, _arg)| {
@@ -407,22 +426,44 @@ impl Lowerer {
                         (var.clone(), Immediate::Var(var))
                     })
                     .unzip();
-                // tail calls are compiled to a branch
-                let block =
-                    BlockBody::Terminator(Terminator::Branch(Branch {
-                        target: match env.get(&fun) {
-                            Some(lbl) => lbl.clone(),
-                            None => {
-                                let tail_lbl = self
-                                    .blocks
-                                    .fresh(format!("{}_tail", fun.hint()));
-                                env.insert(fun.clone(), tail_lbl.clone());
-                                tail_lbl
-                            }
-                        },
 
-                        args: args_imm,
-                    }));
+                let block = match env.get(&fun) {
+                    Some(EnvVal::Extern) => {
+                        let res =
+                            self.vars.fresh(format!("{}_res", fun.hint()));
+                        BlockBody::Operation {
+                            dest: res.clone(),
+                            op: Operation::Call { fun, args: args_imm },
+                            next: Box::new(k.invoke(Immediate::Var(res))),
+                        }
+                    }
+                    _ => match k {
+                        Continuation::Block(..) => unimplemented!(
+                            "local non-tail calls not yet supported"
+                        ),
+                        Continuation::Return => {
+                            // compile local tail call to branch
+                            BlockBody::Terminator(Terminator::Branch(
+                                Branch {
+                                    target: match env.get(&fun) {
+                                        Some(EnvVal::BlockName(lbl)) => {
+                                            lbl.clone()
+                                        }
+                                        Some(EnvVal::Extern) => unreachable!("non-extern function should not be extern"),
+                                        None => {
+                                            let tail_lbl = self
+                                                .blocks
+                                                .fresh(format!("{}_tail", fun.hint()));
+                                            env.insert(fun.clone(), EnvVal::BlockName(tail_lbl.clone()));
+                                            tail_lbl
+                                        },
+                                    },
+                                    args: args_imm,
+                                },
+                            ))
+                        }
+                    },
+                };
 
                 // compile in reverse order, as above
                 args.into_iter().zip(args_var).rev().fold(
