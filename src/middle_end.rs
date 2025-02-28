@@ -331,7 +331,34 @@ impl Lowerer {
                     }
                 }
             }
-            Expr::FunDefs { decls, body, loc } => todo!(),
+            Expr::FunDefs { decls, body, loc } => {
+                let next = Box::new(self.lower_expr_kont(*body, k));
+                BlockBody::SubBlocks {
+                    blocks: decls
+                        .into_iter()
+                        .filter_map(
+                            |FunDecl { name, params, body, loc: _ }| {
+                                // tail recursive functions are built as sub-blocks
+                                Some(BasicBlock {
+                                    label: self.blocks.fresh(format!(
+                                        "{}_tail",
+                                        name.hint()
+                                    )),
+                                    params: params
+                                        .into_iter()
+                                        .map(|(p, _)| p)
+                                        .collect(),
+                                    body: self.lower_expr_kont(
+                                        body,
+                                        Continuation::Return,
+                                    ),
+                                })
+                            },
+                        )
+                        .collect(),
+                    next,
+                }
+            }
             Expr::Call { fun, args, loc } => todo!(),
         }
     }
