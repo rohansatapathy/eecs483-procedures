@@ -1,0 +1,4 @@
+extern print(x)
+
+def main(x):
+    print(x)
