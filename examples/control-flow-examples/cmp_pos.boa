@@ -1,0 +1,5 @@
+def main(x):
+    if 30 > 0:
+        x
+    else:
+        0

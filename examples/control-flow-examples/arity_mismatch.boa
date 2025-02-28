@@ -1,0 +1,6 @@
+def main(x):
+    let y = 4, z = 5 in
+    def foo(x):
+        x
+    in
+    foo(y, z)

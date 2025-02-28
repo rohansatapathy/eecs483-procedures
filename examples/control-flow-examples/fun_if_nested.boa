@@ -1,0 +1,7 @@
+def main(x):
+    def foo(bar, baz):
+        if 0: bar else: baz
+    in
+    let y = add1(x) in
+    let z = add1(y) in
+    foo(y, z)

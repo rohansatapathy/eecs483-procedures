@@ -1,0 +1,7 @@
+def main(x):
+    def f(x):
+        g(x)
+    and
+    def g(x):
+        1 + x
+    in f(2)

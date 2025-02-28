@@ -1,0 +1,8 @@
+def main(x):
+    if 0:
+        20
+    else:
+        if 1:
+            10 
+        else:
+            0

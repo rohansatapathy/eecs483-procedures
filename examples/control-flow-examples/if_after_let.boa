@@ -1,0 +1,3 @@
+def main(x):
+    let y = x + 5 in
+    if y: 100000 else: 17

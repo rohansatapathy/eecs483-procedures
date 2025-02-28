@@ -1,0 +1,8 @@
+def main(x):
+    def foo(x):
+        x
+        in
+    if foo(x):
+        x
+    else:
+        add1(x)

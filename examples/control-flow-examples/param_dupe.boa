@@ -1,0 +1,5 @@
+def main(x):
+    def foo(x, x):
+        add1(x)
+    in
+    x

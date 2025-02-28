@@ -1,0 +1,8 @@
+def main(x):
+    let y = (
+        if x:
+            (let z = 5 in add1(z))
+        else:
+            (let z = 10 in z)
+    )
+    in y

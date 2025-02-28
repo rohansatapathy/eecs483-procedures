@@ -1,0 +1,3 @@
+def main(x):
+    let foo = (if x: 5 else: 6) in
+    add1(foo)

@@ -1,0 +1,6 @@
+def main(x):
+    def foo(x):
+        x
+        in
+    let bar = if x: foo(x) else: foo(x) in
+    bar
