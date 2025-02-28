@@ -1,0 +1,7 @@
+def main(x):
+    if x == 5:
+        x
+    else: if x < 5:
+        main(x + 1)
+    else:
+        main(x - 1)
