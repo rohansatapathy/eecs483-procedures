@@ -13,16 +13,23 @@ struct Env<'a> {
     next: i32,
     arena: HashMap<&'a VarName, i32>,
     blocks: HashMap<&'a BlockName, i32>,
+    num_locals: usize,
 }
 
 impl<'a> Env<'a> {
     fn new() -> Self {
-        Env { next: 1, arena: HashMap::new(), blocks: HashMap::new() }
+        Env {
+            next: 1,
+            arena: HashMap::new(),
+            blocks: HashMap::new(),
+            num_locals: 0,
+        }
     }
     fn allocate(&mut self, x: &'a VarName) -> i32 {
         let loc = self.next;
         self.arena.insert(x, loc);
         self.next += 1;
+        self.num_locals += 1;
         loc
     }
     fn lookup(&self, x: &'a VarName) -> i32 {
@@ -237,7 +244,52 @@ impl Emitter {
                 }
             }
             Operation::Call { fun, args } => {
-                unimplemented!("backend doesn't support calls yet")
+                let L = env.num_locals;
+                let A = if args.len() > 6 { args.len() - 6 } else { 0 };
+                let P = if (L + A) % 2 == 0 { 1 } else { 0 };
+
+                static REG_ARG_LOCS: [Reg; 6] = [
+                    Reg::Rdi,
+                    Reg::Rsi,
+                    Reg::Rdx,
+                    Reg::Rcx,
+                    Reg::R8,
+                    Reg::R9,
+                ];
+
+                let mut args = args.iter();
+
+                // args.zip() will only take as many args as there are in
+                // REG_ARG_LOCS, leaving the remaining for us to stack-allocate.
+                for (arg, dest) in args.by_ref().zip(REG_ARG_LOCS) {
+                    self.emit_imm_reg(arg, dest, env);
+                }
+
+                // Stack-allocate the remaining args
+                for (i, arg) in args.enumerate() {
+                    self.emit_imm_reg(arg, Reg::Rax, env);
+                    self.emit(store_mem((L + P + A - i) as i32, Reg::Rax));
+                }
+
+                // For debugging purposes
+                if (L + P + A) % 2 == 0 {
+                    panic!("misaligned stack");
+                }
+
+                // Decrement stack pointer
+                self.emit(Instr::Sub(BinArgs::ToReg(
+                    Reg::Rsp,
+                    Arg32::Unsigned((L + P + A) as u32),
+                )));
+
+                // Emit the call
+                self.emit(Instr::Call(fun.to_string()));
+
+                // Increment the stack pointer again
+                self.emit(Instr::Add(BinArgs::ToReg(
+                    Reg::Rsp,
+                    Arg32::Unsigned((L + P + A) as u32),
+                )));
             }
         }
         // allocate the destination to be the next available offset from rsp
