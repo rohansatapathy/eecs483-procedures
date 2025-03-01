@@ -1,0 +1,12 @@
+extern print(x)
+
+def main(x):
+    let a = 5, b = 6, c = 7 in
+    def foo(x):
+        if x:
+            print(x * x)
+        else:
+            print(x)
+    in
+    foo(x)
+        
