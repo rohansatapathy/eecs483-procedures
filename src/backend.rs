@@ -8,6 +8,10 @@ use crate::middle_end::Lowerer;
 use crate::ssa::*;
 
 use std::collections::HashMap;
+
+static REG_ARG_LOCS: [Reg; 6] =
+    [Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9];
+
 #[derive(Clone)]
 struct Env<'a> {
     next: i32,
@@ -248,20 +252,13 @@ impl Emitter {
                 let A = if args.len() > 6 { args.len() - 6 } else { 0 };
                 let P = if (L + A) % 2 == 0 { 1 } else { 0 };
 
-                static REG_ARG_LOCS: [Reg; 6] = [
-                    Reg::Rdi,
-                    Reg::Rsi,
-                    Reg::Rdx,
-                    Reg::Rcx,
-                    Reg::R8,
-                    Reg::R9,
-                ];
-
                 let mut args = args.iter();
 
                 // args.zip() will only take as many args as there are in
                 // REG_ARG_LOCS, leaving the remaining for us to stack-allocate.
-                for (arg, dest) in args.by_ref().zip(REG_ARG_LOCS) {
+                for (arg, dest) in
+                    args.by_ref().take(REG_ARG_LOCS.len()).zip(REG_ARG_LOCS)
+                {
                     self.emit_imm_reg(arg, dest, env);
                 }
 
@@ -279,7 +276,7 @@ impl Emitter {
                 // Decrement stack pointer
                 self.emit(Instr::Sub(BinArgs::ToReg(
                     Reg::Rsp,
-                    Arg32::Unsigned((L + P + A) as u32),
+                    Arg32::Unsigned((L + P + A) as u32 * 8),
                 )));
 
                 // Emit the call
@@ -288,7 +285,7 @@ impl Emitter {
                 // Increment the stack pointer again
                 self.emit(Instr::Add(BinArgs::ToReg(
                     Reg::Rsp,
-                    Arg32::Unsigned((L + P + A) as u32),
+                    Arg32::Unsigned((L + P + A) as u32 * 8),
                 )));
             }
         }
